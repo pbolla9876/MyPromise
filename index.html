@@ -65,7 +65,14 @@
   .music-btn.ready{ opacity:.85; }
   .music-btn:hover{ transform:scale(1.08); background:rgba(10,16,26,.65); }
   .music-btn.muted{ opacity:.4; }
-  .music-btn.unavailable{ display:none; }
+  .music-btn.unavailable{ opacity:.35; cursor:not-allowed; }
+  .music-btn.unavailable::after{
+    content:'';
+    position:absolute;
+    width:26px; height:1px;
+    background:rgba(246,224,180,.7);
+    transform:rotate(-45deg);
+  }
 
   /* ---------- SKY ---------- */
   .sky{
@@ -520,7 +527,9 @@
 
   <div class="progress" id="progress"></div>
   <button class="music-btn" id="musicBtn" title="Music" aria-label="Toggle music">♪</button>
-  <audio id="bgm" src="music.mp3" loop preload="none"></audio>
+  <div id="yt-player-wrap" style="position:fixed; width:1px; height:1px; overflow:hidden; opacity:0; pointer-events:none;">
+    <div id="yt-player"></div>
+  </div>
 
   <div class="sky" id="sky" data-phase="0">
     <div class="sky-layer layer-0"></div>
@@ -639,12 +648,69 @@
   const endNote = document.getElementById('endNote');
   const progress = document.getElementById('progress');
   const musicBtn = document.getElementById('musicBtn');
-  const bgm = document.getElementById('bgm');
   const burstLayer = document.getElementById('burstLayer');
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-  let musicReady = false;
+  // ---- background music via hidden YouTube embed ----
+  const YT_VIDEO_ID = 'scRQR-FRfIo';
+  let ytPlayer = null;
+  let ytReady = false;
+  let ytFailed = false;
   let musicPlaying = false;
+
+  musicBtn.classList.add('ready'); // visible from the start so it's always clickable
+
+  function initYT(){
+    if(ytPlayer || ytFailed) return;
+    if(typeof YT === 'undefined' || !YT.Player){
+      // API script hasn't loaded yet (blocked, slow network, etc.)
+      ytFailed = true;
+      musicBtn.classList.add('unavailable');
+      musicBtn.title = "Music unavailable (blocked or offline)";
+      return;
+    }
+    ytPlayer = new YT.Player('yt-player', {
+      height:'1', width:'1', videoId: YT_VIDEO_ID,
+      playerVars:{ autoplay:0, controls:0, disablekb:1, modestbranding:1, playsinline:1 },
+      events:{
+        onReady:function(){
+          ytReady = true;
+          ytPlayer.setVolume(45);
+          ytPlayer.playVideo();
+        },
+        onStateChange:function(e){
+          if(e.data === YT.PlayerState.PLAYING){
+            musicPlaying = true;
+            musicBtn.classList.remove('muted');
+          } else if(e.data === YT.PlayerState.PAUSED){
+            musicPlaying = false;
+            musicBtn.classList.add('muted');
+          } else if(e.data === YT.PlayerState.ENDED){
+            ytPlayer.seekTo(0);
+            ytPlayer.playVideo();
+          }
+        },
+        onError:function(){
+          ytFailed = true;
+          musicBtn.classList.add('unavailable');
+          musicBtn.title = "This track can't be embedded — try a different link";
+        }
+      }
+    });
+  }
+
+  const ytScript = document.createElement('script');
+  ytScript.src = 'https://www.youtube.com/iframe_api';
+  ytScript.onerror = function(){
+    ytFailed = true;
+    musicBtn.classList.add('unavailable');
+    musicBtn.title = "Music unavailable (couldn't reach YouTube)";
+  };
+  document.head.appendChild(ytScript);
+  window.onYouTubeIframeAPIReady = initYT;
+
+  // if the API never calls back (blocked script, slow network), fail gracefully after 6s
+  setTimeout(()=>{ if(!ytPlayer && !ytFailed) initYT(); }, 6000);
 
   function buildStars(){
     const frag = document.createDocumentFragment();
@@ -842,28 +908,19 @@
     window.scrollTo({top:0, behavior:'instant'});
     setTimeout(playLetter, 1000);
 
-    // prep audio (best effort, silently fails if music.mp3 isn't present)
-    bgm.volume = 0.35;
-    bgm.play().then(()=>{
-      musicReady = true; musicPlaying = true;
-      musicBtn.classList.add('ready');
-    }).catch(()=>{
-      musicReady = true; musicPlaying = false;
-      musicBtn.classList.add('ready','muted');
-    });
+    // start music on this user gesture (guaranteed real click)
+    initYT();
+    if(ytPlayer && ytReady){ ytPlayer.playVideo(); }
   }
 
   musicBtn.addEventListener('click', ()=>{
-    if(!musicReady) return;
+    if(ytFailed) return;
+    if(!ytPlayer){ initYT(); return; }
+    if(!ytReady) return;
     if(musicPlaying){
-      bgm.pause();
-      musicPlaying = false;
-      musicBtn.classList.add('muted');
+      ytPlayer.pauseVideo();
     } else {
-      bgm.play().then(()=>{
-        musicPlaying = true;
-        musicBtn.classList.remove('muted');
-      }).catch(()=>{});
+      ytPlayer.playVideo();
     }
   });
 
